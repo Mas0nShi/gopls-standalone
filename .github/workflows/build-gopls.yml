@@ -116,8 +116,42 @@ jobs:
           cd ..
           echo "Created package: ${ZIP_NAME}"
 
-          echo "ASSET_PATH=${ZIP_NAME}" >> $GITHUB_ENV
-      - name: Release
-        uses: softprops/action-gh-release@v2
+      - name: Upload gopls artifact
+        uses: actions/upload-artifact@v4
         with:
-          files: ${{ env.ASSET_PATH }}
+          # 上传唯一的 ZIP 包作为构件
+          name: gopls-zip-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: gopls-*.zip
+          retention-days: 1
+          
+  create-release:
+    name: Create GitHub Release
+    needs: [check-version, build]
+    if: needs.check-version.outputs.needs_update == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Download all artifacts
+        uses: actions/download-artifact@v5
+        with:
+          merge-multiple: true
+          path: ./artifacts
+
+      - name: Create Release and Upload Assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ needs.check-version.outputs.new_version }}"
+          
+          # 创建 Release，但不附加文件，--generate-notes 会自动生成更新日志
+          gh release create "$TAG" \
+            --title "gopls ${TAG}" \
+            --generate-notes
+          
+          # 使用 find 命令找到所有下载的 zip 包并上传
+          # 这比之前的 find 命令更简洁，因为我们知道所有要上传的都是 .zip 文件
+          find ./artifacts -type f -name "*.zip" -exec gh release upload "$TAG" {} +
