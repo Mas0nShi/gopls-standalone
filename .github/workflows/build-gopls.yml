@@ -85,15 +85,15 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
-          # 步骤 1: 创建一个临时模块环境
+          # 1: 创建一个临时模块环境
           mkdir temp-module
           cd temp-module
           go mod init temp
-
+          # 2. 下载
           echo "Downloading gopls@${{ needs.check-version.outputs.new_version }}..."
           go get golang.org/x/tools/gopls@${{ needs.check-version.outputs.new_version }}
 
-          # 步骤 3: 使用 'go build' 进行编译
+          # 3. 使用 'go build' 进行编译
           BINARY_NAME="gopls-${{ matrix.goos }}-${{ matrix.goarch }}"
           if [ "${{ matrix.goos }}" == "windows" ]; then
             BINARY_NAME="${BINARY_NAME}.exe"
@@ -102,11 +102,27 @@ jobs:
           echo "Building ${BINARY_NAME}..."
           go build -o "../${BINARY_NAME}" -ldflags="-s -w" golang.org/x/tools/gopls
 
+          # 4. 创建打包目录结构
+          PACKAGE_DIR="gopls-${{ matrix.goos }}-${{ matrix.goarch }}"
+          mkdir -p "${PACKAGE_DIR}/bin"
+
+          # 5. 移动二进制文件到指定结构中
+          mv "${BINARY_NAME}" "${PACKAGE_DIR}/bin/"
+
+          # 6. 创建 ZIP 压缩包
+          ZIP_NAME="${PACKAGE_DIR}.zip"
+          # 在 PACKAGE_DIR 目录内执行 zip，以确保 zip 包内的根目录是 bin
+          cd "${PACKAGE_DIR}"
+          zip -r "../${ZIP_NAME}" .
+          cd ..
+          echo "Created package: ${ZIP_NAME}"
+
       - name: Upload gopls artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gopls-binaries
-          path: gopls-*
+          # 上传唯一的 ZIP 包作为构件
+          name: gopls-zip-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: gopls-*.zip
           retention-days: 1
 
   create-release:
@@ -123,7 +139,7 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: .
+          path: ./artifacts
 
       - name: Create Release and Upload Assets
         env:
@@ -132,9 +148,11 @@ jobs:
           # 使用从 check-version 作业传递过来的版本号作为 tag
           TAG="${{ needs.check-version.outputs.new_version }}"
           
-          # 使用 gh cli 创建 release
-          # --generate-notes 会自动生成发布说明
+          # 创建 Release，但不附加文件，--generate-notes 会自动生成更新日志
           gh release create "$TAG" \
             --title "gopls ${TAG}" \
-            --notes "Automated release of gopls version ${TAG}" \
-            ./gopls-*
+            --generate-notes
+          
+          # 使用 find 命令找到所有下载的 zip 包并上传
+          # 这比之前的 find 命令更简洁，因为我们知道所有要上传的都是 .zip 文件
+          find ./artifacts -type f -name "*.zip" -exec gh release upload "$TAG" {} +
