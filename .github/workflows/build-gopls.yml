@@ -98,17 +98,16 @@ jobs:
           if [ "${{ matrix.goos }}" == "windows" ]; then
             BINARY_NAME="${BINARY_NAME}.exe"
           fi
-          
+
           echo "Building ${BINARY_NAME}..."
-          go build -o "../${BINARY_NAME}" -ldflags="-s -w" golang.org/x/tools/gopls
-          cd ..
+          go build -o "${BINARY_NAME}" -ldflags="-s -w" golang.org/x/tools/gopls
           # 4. 创建打包目录结构
           PACKAGE_DIR="gopls-${{ matrix.goos }}-${{ matrix.goarch }}"
-          mkdir -p "${PACKAGE_DIR}/bin"
+          mkdir -p "../${PACKAGE_DIR}/bin"
 
           # 5. 移动二进制文件到指定结构中
-          mv "${BINARY_NAME}" "${PACKAGE_DIR}/bin/"
-
+          mv "${BINARY_NAME}" "../${PACKAGE_DIR}/bin/"
+          cd ..
           # 6. 创建 ZIP 压缩包
           ZIP_NAME="${PACKAGE_DIR}.zip"
           # 在 PACKAGE_DIR 目录内执行 zip，以确保 zip 包内的根目录是 bin
