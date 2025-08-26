@@ -84,20 +84,23 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          # 核心改进：手动指定 GOBIN 到当前工作目录下的 bin 文件夹
+          GOBIN: ${{ github.workspace }}/bin
         run: |
-          # 使用 needs.check-version.outputs.new_version 来编译指定的最新版本
+          # 确保 GOBIN 目录存在
+          mkdir -p ${{ github.workspace }}/bin
+          # go install 现在会将二进制文件精确地安装到 GOBIN
           go install -ldflags="-s -w" golang.org/x/tools/gopls@${{ needs.check-version.outputs.new_version }}
-
       - name: Prepare Artifact
         run: |
-          GOPLS_PATH=$(go env GOPATH)/bin/gopls
+          cd ${{ github.workspace }}/bin
           BINARY_NAME="gopls-${{ matrix.goos }}-${{ matrix.goarch }}"
+          
+          # 只需处理 Windows 的 .exe 后缀
           if [ "${{ matrix.goos }}" == "windows" ]; then
-            mv $GOPLS_PATH $GOPLS_PATH.exe
-            BINARY_NAME="${BINARY_NAME}.exe"
-            mv $GOPLS_PATH.exe ./$BINARY_NAME
+            mv gopls.exe "${BINARY_NAME}.exe"
           else
-            mv $GOPLS_PATH ./$BINARY_NAME
+            mv gopls "${BINARY_NAME}"
           fi
           echo "Prepared artifact: ${BINARY_NAME}"
 
@@ -105,8 +108,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: gopls-binaries
-          path: gopls-*
-          retention-days: 1 # 构件是临时的，发布后就不需要了
+          path: ${{ github.workspace }}/bin/*
+          retention-days: 1
 
   create-release:
     name: Create GitHub Release
@@ -123,7 +126,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: gopls-binaries
-          path: ./gopls-binaries
+          path: .
 
       - name: Create Release and Upload Assets
         env:
@@ -137,4 +140,4 @@ jobs:
           gh release create "$TAG" \
             --title "gopls ${TAG}" \
             --notes "Automated release of gopls version ${TAG}" \
-            ./gopls-binaries/*
+            ./gopls-*
