@@ -101,7 +101,7 @@ jobs:
           
           echo "Building ${BINARY_NAME}..."
           go build -o "../${BINARY_NAME}" -ldflags="-s -w" golang.org/x/tools/gopls
-
+          cd ..
           # 4. 创建打包目录结构
           PACKAGE_DIR="gopls-${{ matrix.goos }}-${{ matrix.goarch }}"
           mkdir -p "${PACKAGE_DIR}/bin"
