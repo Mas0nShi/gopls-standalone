@@ -1,0 +1,139 @@
+# .github/workflows/build-gopls.yml
+
+name: Build and Release gopls on Update
+
+on:
+  # 定时触发：每天 UTC 时间 8:00 运行一次
+  schedule:
+    - cron: '0 8 * * *'
+  # 仍然保留手动触发的选项
+  workflow_dispatch:
+
+# 设置权限，允许 Action 创建 Release
+permissions:
+  contents: write
+
+jobs:
+  check-version:
+    name: Check for new gopls version
+    runs-on: ubuntu-latest
+    outputs:
+      needs_update: ${{ steps.check.outputs.needs_update }}
+      new_version: ${{ steps.check.outputs.new_version }}
+
+    steps:
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22.x'
+
+      - name: Check versions
+        id: check
+        env:
+          # 需要 GitHub Token 来查询你仓库的 releases
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 1. 获取你仓库最新的 release tag (代表你已有的版本)
+          # 'gh release list' 需要 gh cli，它在 github runner 中预装了
+          # --limit 1 获取最新的一个
+          # || true 是为了防止在没有任何 release 时命令失败
+          LATEST_RELEASE_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' || true)
+          # 如果没有 release，就设置一个不存在的版本号
+          if [ -z "$LATEST_RELEASE_TAG" ]; then
+            LATEST_RELEASE_TAG="v0.0.0"
+          fi
+          echo "Latest release in this repository: $LATEST_RELEASE_TAG"
+
+          # 2. 获取 gopls 的最新版本号
+          # go list -m -json 会输出包含版本信息的 JSON
+          # jq -r .Version 从 JSON 中提取版本号
+          LATEST_GOPLS_VERSION=$(go list -m -json golang.org/x/tools/gopls@latest | jq -r .Version)
+          echo "Latest official gopls version: $LATEST_GOPLS_VERSION"
+
+          # 3. 比较版本号
+          if [ "$LATEST_RELEASE_TAG" == "$LATEST_GOPLS_VERSION" ]; then
+            echo "gopls is up to date."
+            echo "needs_update=false" >> $GITHUB_OUTPUT
+          else
+            echo "New gopls version found! Will trigger build."
+            echo "needs_update=true" >> $GITHUB_OUTPUT
+            echo "new_version=${LATEST_GOPLS_VERSION}" >> $GITHUB_OUTPUT
+          fi
+
+  build:
+    name: Build gopls
+    # 依赖 check-version 作业
+    needs: check-version
+    # 仅当 check-version 的输出 needs_update 为 'true' 时运行
+    if: needs.check-version.outputs.needs_update == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [ linux, windows, darwin ]
+        goarch: [ amd64, arm64 ]
+
+    steps:
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.0'
+          check-latest: true
+
+      - name: Compile gopls for ${{ matrix.goos }}/${{ matrix.goarch }}
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          # 使用 needs.check-version.outputs.new_version 来编译指定的最新版本
+          go install -ldflags="-s -w" golang.org/x/tools/gopls@${{ needs.check-version.outputs.new_version }}
+
+      - name: Prepare Artifact
+        run: |
+          GOPLS_PATH=$(go env GOPATH)/bin/gopls
+          BINARY_NAME="gopls-${{ matrix.goos }}-${{ matrix.goarch }}"
+          if [ "${{ matrix.goos }}" == "windows" ]; then
+            mv $GOPLS_PATH $GOPLS_PATH.exe
+            BINARY_NAME="${BINARY_NAME}.exe"
+            mv $GOPLS_PATH.exe ./$BINARY_NAME
+          else
+            mv $GOPLS_PATH ./$BINARY_NAME
+          fi
+          echo "Prepared artifact: ${BINARY_NAME}"
+
+      - name: Upload gopls artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gopls-binaries
+          path: gopls-*
+          retention-days: 1 # 构件是临时的，发布后就不需要了
+
+  create-release:
+    name: Create GitHub Release
+    # 依赖 build 作业
+    needs: [check-version, build]
+    # 同样，仅当需要更新时运行
+    if: needs.check-version.outputs.needs_update == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # 必须有这个权限才能创建 release
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: gopls-binaries
+          path: ./gopls-binaries
+
+      - name: Create Release and Upload Assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 使用从 check-version 作业传递过来的版本号作为 tag
+          TAG="${{ needs.check-version.outputs.new_version }}"
+          
+          # 使用 gh cli 创建 release
+          # --generate-notes 会自动生成发布说明
+          gh release create "$TAG" \
+            --title "gopls ${TAG}" \
+            --notes "Automated release of gopls version ${TAG}" \
+            ./gopls-binaries/*
