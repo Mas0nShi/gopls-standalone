@@ -22,10 +22,14 @@ jobs:
       new_version: ${{ steps.check.outputs.new_version }}
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22.x' # 建议使用稳定版而非预览版
+          go-version: '1.25.0'
+          check-latest: true
 
       - name: Check versions
         id: check
@@ -81,6 +85,9 @@ jobs:
         goarch: [ amd64, arm64 ]
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -142,6 +149,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        
       - name: Download all artifacts
         uses: actions/download-artifact@v5
         with:
