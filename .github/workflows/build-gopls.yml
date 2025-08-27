@@ -25,33 +25,41 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.0'
-          check-latest: true
+          go-version: '1.22.x' # 建议使用稳定版而非预览版
 
       - name: Check versions
         id: check
         env:
-          # 需要 GitHub Token 来查询你仓库的 releases
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 1. 获取你仓库最新的 release tag (代表你已有的版本)
-          # 'gh release list' 需要 gh cli，它在 github runner 中预装了
-          # --limit 1 获取最新的一个
-          # || true 是为了防止在没有任何 release 时命令失败
-          LATEST_RELEASE_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' || true)
-          # 如果没有 release，就设置一个不存在的版本号
-          if [ -z "$LATEST_RELEASE_TAG" ]; then
-            LATEST_RELEASE_TAG="v0.0.0"
+          # 步骤 1: 尝试使用新版 gh 命令获取最新 release tag
+          # 我们不使用 '|| true'，以便可以捕获它的退出码
+          echo "Attempting to get latest release tag with modern 'gh' command..."
+          LATEST_RELEASE_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName')
+          
+          # 步骤 2: 检查上一个命令的退出码
+          # 如果退出码不为 0，说明命令本身失败了 (很可能是因为 gh 版本太旧)
+          if [ $? -ne 0 ]; then
+            echo "Modern command failed. Falling back to legacy-compatible command..."
+            # 尝试使用旧版本也兼容的命令。
+            # 这里的 '|| true' 很重要，因为它能处理“确实没有 release”导致此命令也失败的情况，
+            # 确保在这种情况下 LATEST_RELEASE_TAG 是一个安全的空字符串。
+            LATEST_RELEASE_TAG=$(gh release view --json tagName --jq .tagName || true)
           fi
-          echo "Latest release in this repository: $LATEST_RELEASE_TAG"
 
-          # 2. 获取 gopls 的最新版本号
-          # go list -m -json 会输出包含版本信息的 JSON
-          # jq -r .Version 从 JSON 中提取版本号
+          # 步骤 3: 报告最终获取到的 tag
+          if [ -z "$LATEST_RELEASE_TAG" ]; then
+            echo "No existing release found in this repository."
+          else
+            echo "Latest release in this repository: $LATEST_RELEASE_TAG"
+          fi
+
+          # 步骤 4: 获取 gopls 的最新版本号
           LATEST_GOPLS_VERSION=$(go list -m -json golang.org/x/tools/gopls@latest | jq -r .Version)
           echo "Latest official gopls version: $LATEST_GOPLS_VERSION"
 
-          # 3. 比较版本号
+          # 步骤 5: 比较版本号
+          # 如果 LATEST_RELEASE_TAG 为空，这个比较会是 false，正确触发第一次构建
           if [ "$LATEST_RELEASE_TAG" == "$LATEST_GOPLS_VERSION" ]; then
             echo "gopls is up to date."
             echo "needs_update=false" >> $GITHUB_OUTPUT
@@ -60,7 +68,6 @@ jobs:
             echo "needs_update=true" >> $GITHUB_OUTPUT
             echo "new_version=${LATEST_GOPLS_VERSION}" >> $GITHUB_OUTPUT
           fi
-
   build:
     name: Build gopls
     # 依赖 check-version 作业
